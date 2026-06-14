@@ -1,26 +1,21 @@
 /*
- * storage.js — persistence seam.
+ * storage.js — persistence seam (localStorage today, backend later).
  *
- * In this static MVP the store is the browser's localStorage. The public API
- * (list / get / save / remove + catalog accessors) is deliberately narrow and
- * synchronous-feeling so a real backend (Flask + SQLite per ARCHITECTURE.md)
- * can be dropped in behind the same surface later without touching the UI.
- *
- * "Auto-backup on every write" (§9) is honored here with a lightweight rolling
- * snapshot kept under a separate key.
+ * Stores notes + project/tag catalogs under one key. Rolling auto-backups on
+ * every write. Migrates any v1 "decisions" data into v2 notes so early captures
+ * are never lost (schema-is-the-product: never break backward compatibility).
  */
 (function (global) {
   "use strict";
 
-  const KEY = "engnote.v1";
+  const KEY = "engnote.v1"; // single doc key (kept stable across schema bumps)
   const BACKUP_KEY = "engnote.v1.backups";
   const MAX_BACKUPS = 10;
 
-  // Single document: everything lives under one key for trivial export/import.
   function emptyDoc() {
     return {
       schema_version: global.Schema.SCHEMA_VERSION,
-      decisions: [],
+      notes: [],
       projects: [],
       tags: [],
       updated_at: global.Schema.now(),
@@ -38,17 +33,49 @@
       console.error("Failed to read store, starting empty:", e);
       cache = emptyDoc();
     }
-    // Tolerate older / partial docs.
-    cache.decisions = cache.decisions || [];
     cache.projects = cache.projects || [];
     cache.tags = cache.tags || [];
+    migrateIfNeeded(cache);
+    cache.notes = cache.notes || [];
     return cache;
+  }
+
+  // v1 (decisions) → v2 (notes): fold the old structured fields into a readable
+  // freeform body, preserving the content as plain text the user can edit.
+  function migrateIfNeeded(doc) {
+    if (Array.isArray(doc.notes)) return; // already v2+
+    const decisions = Array.isArray(doc.decisions) ? doc.decisions : [];
+    doc.notes = decisions.map(function (d) {
+      const parts = [];
+      if (d.context) parts.push(d.context);
+      if (d.chosen_option) parts.push("Chosen: " + d.chosen_option);
+      if (d.reasoning) parts.push("Why: " + d.reasoning);
+      if (Array.isArray(d.options_considered) && d.options_considered.length)
+        parts.push("Options: " + d.options_considered.join(", "));
+      if (d.notes) parts.push(d.notes);
+      return global.Schema.makeNote({
+        id: d.id,
+        title: d.title,
+        body: parts.join("\n\n"),
+        tag_ids: d.tag_ids,
+        project_id: d.project_id,
+        attachments: (d.attachments || []).map(function (a) {
+          return { type: a.type === "image" ? "image" : a.url && !a.path ? "link" : "file",
+            label: a.label, url: a.url, mime_type: a.mime_type, size_bytes: a.size_bytes };
+        }),
+        created_at: d.date_created,
+        updated_at: d.date_decided || d.date_created,
+      });
+    });
+    delete doc.decisions;
+    doc.schema_version = global.Schema.SCHEMA_VERSION;
   }
 
   function persist() {
     const doc = load();
+    doc.schema_version = global.Schema.SCHEMA_VERSION;
     doc.updated_at = global.Schema.now();
-    snapshot(doc); // backup BEFORE overwrite (cheap, rolling)
+    snapshot(doc);
     global.localStorage.setItem(KEY, JSON.stringify(doc));
   }
 
@@ -60,67 +87,55 @@
       while (backups.length > MAX_BACKUPS) backups.shift();
       global.localStorage.setItem(BACKUP_KEY, JSON.stringify(backups));
     } catch (e) {
-      // Backups are best-effort; never block a write on them.
       console.warn("Backup skipped:", e);
     }
   }
 
-  // --- Decisions ------------------------------------------------------------
-  function listDecisions() {
-    return load().decisions.slice();
+  // --- Notes ----------------------------------------------------------------
+  function listNotes() { return load().notes.slice(); }
+
+  function getNote(id) {
+    return load().notes.find(function (n) { return n.id === id; }) || null;
   }
 
-  function getDecision(id) {
-    return load().decisions.find(function (d) { return d.id === id; }) || null;
-  }
-
-  function saveDecision(decision) {
+  function saveNote(note) {
     const doc = load();
-    const idx = doc.decisions.findIndex(function (d) { return d.id === decision.id; });
-    if (idx >= 0) doc.decisions[idx] = decision;
-    else doc.decisions.push(decision);
+    note.updated_at = global.Schema.now();
+    const idx = doc.notes.findIndex(function (n) { return n.id === note.id; });
+    if (idx >= 0) doc.notes[idx] = note;
+    else doc.notes.push(note);
     persist();
-    return decision;
+    return note;
   }
 
-  function removeDecision(id) {
+  function removeNote(id) {
     const doc = load();
-    doc.decisions = doc.decisions.filter(function (d) { return d.id !== id; });
+    doc.notes = doc.notes.filter(function (n) { return n.id !== id; });
     persist();
   }
 
-  // --- Catalogs (raw access; get-or-create logic lives in catalog.js) -------
+  // --- Catalogs -------------------------------------------------------------
   function listProjects() { return load().projects.slice(); }
   function listTags() { return load().tags.slice(); }
+  function addProject(p) { load().projects.push(p); persist(); return p; }
+  function addTag(t) { load().tags.push(t); persist(); return t; }
 
-  function addProject(project) {
-    load().projects.push(project);
-    persist();
-    return project;
-  }
-
-  function addTag(tag) {
-    load().tags.push(tag);
-    persist();
-    return tag;
-  }
-
-  // --- Whole-document import/export (re-importable JSON, §3.5) --------------
-  function exportDoc() {
-    return JSON.parse(JSON.stringify(load()));
-  }
+  // --- Whole-document import/export ----------------------------------------
+  function exportDoc() { return JSON.parse(JSON.stringify(load())); }
 
   function importDoc(doc) {
-    if (!doc || !Array.isArray(doc.decisions)) {
-      throw new Error("Invalid document: missing decisions array");
+    if (!doc || (!Array.isArray(doc.notes) && !Array.isArray(doc.decisions))) {
+      throw new Error("Invalid document: missing notes array");
     }
     cache = {
-      schema_version: doc.schema_version || global.Schema.SCHEMA_VERSION,
-      decisions: doc.decisions,
+      schema_version: doc.schema_version,
+      notes: doc.notes,
+      decisions: doc.decisions, // let migrateIfNeeded fold these in
       projects: doc.projects || [],
       tags: doc.tags || [],
       updated_at: global.Schema.now(),
     };
+    migrateIfNeeded(cache);
     persist();
     return cache;
   }
@@ -128,22 +143,15 @@
   function stats() {
     const doc = load();
     let bytes = 0;
-    try {
-      bytes = (global.localStorage.getItem(KEY) || "").length;
-    } catch (e) { /* ignore */ }
-    return {
-      decisions: doc.decisions.length,
-      projects: doc.projects.length,
-      tags: doc.tags.length,
-      bytes: bytes,
-    };
+    try { bytes = (global.localStorage.getItem(KEY) || "").length; } catch (e) {}
+    return { notes: doc.notes.length, projects: doc.projects.length, tags: doc.tags.length, bytes: bytes };
   }
 
   global.Store = {
-    listDecisions: listDecisions,
-    getDecision: getDecision,
-    saveDecision: saveDecision,
-    removeDecision: removeDecision,
+    listNotes: listNotes,
+    getNote: getNote,
+    saveNote: saveNote,
+    removeNote: removeNote,
     listProjects: listProjects,
     listTags: listTags,
     addProject: addProject,

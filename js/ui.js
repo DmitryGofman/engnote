@@ -1,9 +1,10 @@
 /*
- * ui.js — view rendering (list / form / detail).
+ * ui.js — capture-first UI: a note list and an open editor.
  *
- * Plain DOM, no framework. Each render* function returns nothing and writes
- * into #app. Navigation is hash-based and lives in app.js; views call
- * location.hash to move around.
+ * The editor is the whole experience: a title and one body you just write or
+ * dictate, plus a quiet toolbar for photos, tags and project. Everything
+ * autosaves. No fill-in fields. The "Organize" button is the seam for the AI
+ * step shipping next.
  */
 (function (global) {
   "use strict";
@@ -15,169 +16,139 @@
 
   const app = function () { return document.getElementById("app"); };
 
-  // --- tiny helpers ---------------------------------------------------------
   function esc(s) {
     return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
-
   function el(html) {
     const t = document.createElement("template");
     t.innerHTML = html.trim();
     return t.content.firstElementChild;
   }
-
-  function dateShort(iso) {
-    if (!iso) return "—";
-    const d = new Date(iso);
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yy = String(d.getFullYear()).slice(2);
-    return dd + "." + mm + "." + yy;
+  function relDate(iso) {
+    if (!iso) return "";
+    const d = new Date(iso), now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString([], { day: "2-digit", month: "short", year: "2-digit" });
   }
-
-  function maxRisk(d) {
-    // crude rollup: highest impact among risks, for the list badge
-    const order = { low: 1, medium: 2, high: 3 };
-    let best = 0;
-    (d.risks || []).forEach(function (r) {
-      if (order[r.impact] > best) best = order[r.impact];
-    });
-    return best ? ["", "low", "medium", "high"][best] : "—";
+  function firstImage(n) {
+    return (n.attachments || []).find(function (a) { return a.type === "image" && a.url; });
   }
-
-  function setStorageStats() {
+  function snippet(n) {
+    const body = (n.body || "").replace(/\s+/g, " ").trim();
+    return body.slice(0, 140);
+  }
+  function setStats() {
     const s = Store.stats();
     const node = document.getElementById("storage-stats");
-    if (node) {
-      node.textContent =
-        s.decisions + " decisions · " + (s.bytes / 1024).toFixed(1) + " KB";
-    }
+    if (node) node.textContent = s.notes + " notes · " + (s.bytes / 1024).toFixed(0) + " KB";
   }
 
   // =========================================================================
-  // LIST VIEW (ARCHITECTURE.md §6.1) — search + filters inline
+  // LIST
   // =========================================================================
-  const listState = { q: "", status: "", project: "" };
+  const listState = { q: "", project: "", tag: "" };
 
   function renderList() {
     const root = app();
     root.innerHTML = "";
 
     const projects = Store.listProjects();
-    const statusOpts = ["", ...Schema.STATUS]
-      .map(function (s) {
-        const sel = s === listState.status ? " selected" : "";
-        return '<option value="' + esc(s) + '"' + sel + ">" + (s ? esc(s) : "all statuses") + "</option>";
-      })
-      .join("");
-    const projOpts = ['<option value="">all projects</option>']
-      .concat(projects.map(function (p) {
-        const sel = p.id === listState.project ? " selected" : "";
-        return '<option value="' + esc(p.id) + '"' + sel + ">" + esc(p.name) + "</option>";
-      }))
-      .join("");
+    const tags = Store.listTags();
+    const projOpts = ['<option value="">All projects</option>'].concat(
+      projects.map(function (p) {
+        return '<option value="' + esc(p.id) + '"' + (p.id === listState.project ? " selected" : "") + ">" + esc(p.name) + "</option>";
+      })).join("");
+    const tagOpts = ['<option value="">All tags</option>'].concat(
+      tags.map(function (t) {
+        return '<option value="' + esc(t.id) + '"' + (t.id === listState.tag ? " selected" : "") + ">#" + esc(t.name) + "</option>";
+      })).join("");
 
     root.appendChild(el(
       '<div class="toolbar">' +
-        '<input id="f-q" class="search" type="search" placeholder="Search title, context, reasoning…" value="' + esc(listState.q) + '" />' +
-        '<select id="f-status" class="filter">' + statusOpts + "</select>" +
+        '<input id="f-q" class="search" type="search" placeholder="Search notes…" value="' + esc(listState.q) + '" />' +
         '<select id="f-project" class="filter">' + projOpts + "</select>" +
+        '<select id="f-tag" class="filter">' + tagOpts + "</select>" +
         '<span class="spacer"></span>' +
-        '<button id="export-all" class="btn">Export all (JSON)</button>' +
-        '<button id="import-doc" class="btn">Import</button>' +
+        '<button id="export-all" class="btn" title="Export everything as JSON">Export</button>' +
+        '<button id="import-doc" class="btn" title="Import a JSON export">Import</button>' +
       "</div>"
     ));
 
-    const tableWrap = el('<div class="table-wrap"></div>');
-    root.appendChild(tableWrap);
-    renderRows(tableWrap);
+    const grid = el('<div class="note-grid"></div>');
+    root.appendChild(grid);
+    renderCards(grid);
 
-    // wire filters
-    root.querySelector("#f-q").addEventListener("input", function (e) {
-      listState.q = e.target.value;
-      renderRows(tableWrap);
-    });
-    root.querySelector("#f-status").addEventListener("change", function (e) {
-      listState.status = e.target.value;
-      renderRows(tableWrap);
-    });
-    root.querySelector("#f-project").addEventListener("change", function (e) {
-      listState.project = e.target.value;
-      renderRows(tableWrap);
-    });
+    root.querySelector("#f-q").addEventListener("input", function (e) { listState.q = e.target.value; renderCards(grid); });
+    root.querySelector("#f-project").addEventListener("change", function (e) { listState.project = e.target.value; renderCards(grid); });
+    root.querySelector("#f-tag").addEventListener("change", function (e) { listState.tag = e.target.value; renderCards(grid); });
     root.querySelector("#export-all").addEventListener("click", function () {
       Exporter.download("engnote-export.json", Exporter.docToJSON(), "application/json");
     });
     root.querySelector("#import-doc").addEventListener("click", importFlow);
 
-    setStorageStats();
+    // Floating compose button
+    const fab = el('<button class="fab" title="New note">+</button>');
+    fab.addEventListener("click", newNote);
+    root.appendChild(fab);
+
+    setStats();
   }
 
-  function filteredDecisions() {
+  function filtered() {
     const q = listState.q.trim().toLowerCase();
-    return Store.listDecisions()
-      .filter(function (d) {
-        if (listState.status && d.status !== listState.status) return false;
-        if (listState.project && d.project_id !== listState.project) return false;
+    return Store.listNotes()
+      .filter(function (n) {
+        if (listState.project && n.project_id !== listState.project) return false;
+        if (listState.tag && (n.tag_ids || []).indexOf(listState.tag) < 0) return false;
         if (q) {
-          const hay = (d.title + " " + d.context + " " + d.reasoning + " " + d.chosen_option).toLowerCase();
+          const hay = (n.title + " " + n.body).toLowerCase();
           if (hay.indexOf(q) < 0) return false;
         }
         return true;
       })
       .sort(function (a, b) {
-        return (b.date_created || "").localeCompare(a.date_created || "");
+        if (!!b.pinned !== !!a.pinned) return b.pinned ? 1 : -1;
+        return (b.updated_at || "").localeCompare(a.updated_at || "");
       });
   }
 
-  function renderRows(wrap) {
-    const rows = filteredDecisions();
-    if (!rows.length) {
-      wrap.innerHTML =
-        '<div class="empty">' +
-        "<p>No decisions yet.</p>" +
-        '<a class="btn btn-primary" href="#/new">+ Capture your first decision</a>' +
-        "</div>";
+  function renderCards(grid) {
+    const notes = filtered();
+    if (!notes.length) {
+      grid.innerHTML = '<div class="empty"><p>No notes yet.</p><p class="muted">Tap + to start writing.</p></div>';
       return;
     }
-
-    const body = rows.map(function (d) {
-      const project = Catalog.getProject(d.project_id);
-      const tags = Catalog.tagNames(d.tag_ids);
-      const superseded = d.status === "superseded" || d.superseded_by;
-      const titleCell = superseded
-        ? '<span class="struck">' + esc(d.title || "(untitled)") + "</span>"
-        : esc(d.title || "(untitled)");
-      return (
-        '<tr data-id="' + esc(d.id) + '">' +
-          '<td class="c-title" data-label="Title">' + titleCell + (d.needs_review ? ' <span class="flag" title="needs review">⚑</span>' : "") + "</td>" +
-          '<td data-label="Date">' + dateShort(d.date_created) + "</td>" +
-          '<td data-label="Status"><span class="badge st-' + esc(d.status) + '">' + esc(d.status) + "</span></td>" +
-          '<td data-label="Conf"><span class="badge cf-' + esc(d.confidence) + '">' + esc(d.confidence) + "</span></td>" +
-          '<td data-label="Risk">' + esc(maxRisk(d)) + "</td>" +
-          '<td data-label="Project">' + esc(project ? project.name : "—") + "</td>" +
-          '<td class="c-tags" data-label="Tags">' + (tags.length ? tags.map(function (t) { return '<span class="chip">' + esc(t) + "</span>"; }).join("") : "—") + "</td>" +
-        "</tr>"
+    grid.innerHTML = "";
+    notes.forEach(function (n) {
+      const project = Catalog.getProject(n.project_id);
+      const tags = Catalog.tagNames(n.tag_ids);
+      const img = firstImage(n);
+      const card = el(
+        '<div class="note-card" data-id="' + esc(n.id) + '">' +
+          (n.pinned ? '<span class="pin">📌</span>' : "") +
+          (img ? '<div class="card-thumb" style="background-image:url(' + esc(img.url) + ')"></div>' : "") +
+          '<div class="card-body">' +
+            '<div class="card-title">' + esc(n.title || "Untitled") + (n.structured ? ' <span class="organized" title="organized">✨</span>' : "") + "</div>" +
+            '<div class="card-snippet">' + esc(snippet(n) || "No additional text") + "</div>" +
+            '<div class="card-meta">' +
+              '<span class="card-date">' + relDate(n.updated_at) + "</span>" +
+              (project ? '<span class="card-project">' + esc(project.name) + "</span>" : "") +
+            "</div>" +
+            (tags.length ? '<div class="card-tags">' + tags.map(function (t) { return '<span class="chip">#' + esc(t) + "</span>"; }).join("") + "</div>" : "") +
+          "</div>" +
+        "</div>"
       );
-    }).join("");
-
-    wrap.innerHTML =
-      '<table class="decisions">' +
-        "<thead><tr>" +
-          "<th>Title</th><th>Date</th><th>Status</th><th>Conf</th><th>Risk</th><th>Project</th><th>Tags</th>" +
-        "</tr></thead>" +
-        "<tbody>" + body + "</tbody>" +
-      "</table>";
-
-    wrap.querySelectorAll("tr[data-id]").forEach(function (tr) {
-      tr.addEventListener("click", function () {
-        location.hash = "#/decision/" + tr.getAttribute("data-id");
-      });
+      card.addEventListener("click", function () { location.hash = "#/note/" + n.id; });
+      grid.appendChild(card);
     });
+  }
+
+  function newNote() {
+    const n = Schema.makeNote({});
+    Store.saveNote(n);
+    location.hash = "#/note/" + n.id;
   }
 
   function importFlow() {
@@ -190,13 +161,9 @@
       const reader = new FileReader();
       reader.onload = function () {
         try {
-          const doc = JSON.parse(reader.result);
-          Store.importDoc(doc);
-          alert("Imported " + (doc.decisions || []).length + " decisions.");
+          Store.importDoc(JSON.parse(reader.result));
           renderList();
-        } catch (e) {
-          alert("Import failed: " + e.message);
-        }
+        } catch (e) { alert("Import failed: " + e.message); }
       };
       reader.readAsText(file);
     });
@@ -204,483 +171,284 @@
   }
 
   // =========================================================================
-  // FORM VIEW (ARCHITECTURE.md §6.2) — quick / full toggle + autosave draft
+  // EDITOR
   // =========================================================================
-  const DRAFT_KEY = "engnote.draft";
+  const MAX_FILE_BYTES = 10 * 1024 * 1024; // localStorage is small; keep media modest
 
-  function renderForm(existing, opts) {
-    opts = opts || {};
+  function renderEditor(id) {
     const root = app();
+    const note = Store.getNote(id);
+    if (!note) { location.hash = "#/"; return; }
+
     root.innerHTML = "";
 
-    // Base record: edit target, supersede pre-fill, or a fresh draft.
-    let d = existing ? JSON.parse(JSON.stringify(existing)) : Schema.makeDecision();
-
-    // Restore an autosaved draft only for brand-new captures.
-    if (!existing && !opts.supersedeOf) {
-      try {
-        const draft = JSON.parse(global.localStorage.getItem(DRAFT_KEY) || "null");
-        if (draft) d = Schema.makeDecision(draft);
-      } catch (e) { /* ignore */ }
-    }
-
-    const heading = opts.supersedeOf
-      ? "Supersede decision"
-      : existing ? "Edit decision" : "New decision";
-
+    // --- top action bar
     root.appendChild(el(
-      '<div class="form-head">' +
-        "<h1>" + esc(heading) + "</h1>" +
-        '<div class="mode-toggle">' +
-          '<button id="mode-quick" class="seg active">Quick Mode</button>' +
-          '<button id="mode-full" class="seg">Full Mode</button>' +
+      '<div class="editor-bar">' +
+        '<button id="back" class="iconbtn" title="Back to notes">‹ Notes</button>' +
+        '<span class="spacer"></span>' +
+        '<button id="pin" class="iconbtn" title="Pin">' + (note.pinned ? "📌" : "📍") + "</button>" +
+        '<button id="organize" class="iconbtn organize-btn" title="Organize into a decision (AI — coming soon)">✨ Organize</button>' +
+        '<button id="export" class="iconbtn" title="Export">⤓</button>' +
+        '<button id="del" class="iconbtn danger" title="Delete">🗑</button>' +
+      "</div>"
+    ));
+
+    const editor = el(
+      '<div class="editor">' +
+        '<input id="e-title" class="e-title" type="text" placeholder="Title" value="' + esc(note.title) + '" />' +
+        '<div class="e-stamp">' + relDate(note.updated_at) + "</div>" +
+        '<textarea id="e-body" class="e-body" placeholder="Start writing… or tap the mic and just talk.">' + esc(note.body) + "</textarea>" +
+        '<div id="e-attachments" class="e-attachments"></div>' +
+        '<div id="organize-panel" class="organize-panel" hidden></div>' +
+      "</div>"
+    );
+    root.appendChild(editor);
+
+    // --- chips bar (project + tags) sits just above the bottom toolbar
+    root.appendChild(el(
+      '<div class="meta-bar">' +
+        '<div class="meta-row"><span class="meta-label">Project</span>' +
+          '<input id="e-project" class="meta-input" type="text" list="project-list" placeholder="none" value="' + esc((Catalog.getProject(note.project_id) || {}).name || "") + '" />' +
+          projectDatalist() +
+        "</div>" +
+        '<div class="meta-row"><span class="meta-label">Tags</span>' +
+          '<div id="tag-chips" class="tag-chips"></div>' +
+          '<input id="e-tag" class="meta-input" type="text" list="tag-list" placeholder="add tag + Enter" />' +
+          tagDatalist() +
         "</div>" +
       "</div>"
     ));
 
-    if (opts.supersedeOf) {
-      root.appendChild(el(
-        '<div class="notice">Pre-filled from <strong>' + esc(opts.supersedeOf.title || "the original") +
-        "</strong>. Saving creates a new decision and marks the original superseded.</div>"
-      ));
-    }
-
-    const form = el('<form id="decision-form" class="decision-form" autocomplete="off"></form>');
-    form.innerHTML = formMarkup(d);
-    root.appendChild(form);
-
-    // --- mode toggle
-    const quickBtn = root.querySelector("#mode-quick");
-    const fullBtn = root.querySelector("#mode-full");
-    function setMode(full) {
-      form.classList.toggle("show-full", full);
-      quickBtn.classList.toggle("active", !full);
-      fullBtn.classList.toggle("active", full);
-    }
-    quickBtn.addEventListener("click", function () { setMode(false); });
-    fullBtn.addEventListener("click", function () { setMode(true); });
-    setMode(!!(existing || opts.supersedeOf)); // existing/full records open in full mode
-
-    wireFormDynamics(form, d);
-
-    // --- autosave draft (new captures only)
-    if (!existing && !opts.supersedeOf) {
-      form.addEventListener("input", function () {
-        try {
-          global.localStorage.setItem(DRAFT_KEY, JSON.stringify(collectForm(form, d)));
-        } catch (e) { /* ignore quota */ }
-      });
-    }
-
-    form.addEventListener("submit", function (e) {
-      e.preventDefault();
-      saveForm(form, d, existing, opts);
-    });
-    root.querySelector("#cancel-btn").addEventListener("click", function () {
-      location.hash = existing ? "#/decision/" + existing.id : "#/";
-    });
-
-    setStorageStats();
-  }
-
-  function formMarkup(d) {
-    const project = Catalog.getProject(d.project_id);
-    const tagNames = Catalog.tagNames(d.tag_ids);
-    const confOpts = Schema.CONFIDENCE.map(function (c) {
-      return '<option value="' + c + '"' + (c === d.confidence ? " selected" : "") + ">" + c + "</option>";
-    }).join("");
-
-    return (
-      // --- Quick fields (always visible)
-      field("Title", '<input name="title" type="text" placeholder=\'e.g. "Servo vs stepper for gimbal"\' value="' + esc(d.title) + '" required />') +
-      field("Context", '<textarea name="context" placeholder="what triggered this, why it matters">' + esc(d.context) + "</textarea>") +
-      field("Chosen Option", '<input name="chosen_option" type="text" placeholder="what you picked" value="' + esc(d.chosen_option) + '" />') +
-      field("Reasoning", '<textarea name="reasoning" placeholder="why">' + esc(d.reasoning) + "</textarea>") +
-
-      // --- Full fields (toggled)
-      '<div class="full-only">' +
-        field("Options Considered", '<textarea name="options_considered" placeholder="one per line">' + esc(d.options_considered.join("\n")) + "</textarea>") +
-        field("Assumptions", '<textarea name="assumptions" placeholder="one per line — what must be true">' + esc(d.assumptions.join("\n")) + "</textarea>") +
-        riskBlock(d.risks) +
-        '<div class="row">' +
-          field("Confidence", '<select name="confidence">' + confOpts + "</select>") +
-          field("Needs Review", '<label class="check"><input name="needs_review" type="checkbox"' + (d.needs_review ? " checked" : "") + ' /> flag to revisit</label>') +
-        "</div>" +
-        '<div class="row">' +
-          field("Status", statusSelect(d.status)) +
-          field("Owner", '<input name="owner" type="text" placeholder="who made it" value="' + esc(d.owner) + '" />') +
-        "</div>" +
-        field("Project", '<input name="project_name" type="text" list="project-list" placeholder="type to search or create…" value="' + esc(project ? project.name : "") + '" />' + projectDatalist()) +
-        field("Subsystem", '<input name="subsystem_name" type="text" placeholder="free text" value="' + esc(d.subsystem_name) + '" />') +
-        field("Tags", '<input name="tags" type="text" list="tag-list" placeholder="comma-separated; created inline" value="' + esc(tagNames.join(", ")) + '" />' + tagDatalist()) +
-        field("References", '<input name="references" type="text" placeholder="drawing no. / PN / build ID / path" value="' + esc(d.references) + '" />') +
-        attachmentsBlock(d.attachments) +
-        field("Follow-up Actions", '<textarea name="follow_up_actions" placeholder="one per line — next steps / open questions">' + esc(d.follow_up_actions.join("\n")) + "</textarea>") +
-        field("Notes", '<textarea name="notes" placeholder="freeform follow-on thoughts">' + esc(d.notes) + "</textarea>") +
-      "</div>" +
-
-      '<div class="form-actions">' +
-        '<button type="submit" class="btn btn-primary">Save</button>' +
-        '<button type="button" id="cancel-btn" class="btn">Cancel</button>' +
-        '<span class="hint">draft auto-saves while editing</span>' +
+    // --- bottom capture toolbar (mic / photo / file)
+    root.appendChild(el(
+      '<div class="capture-bar">' +
+        '<button id="mic" class="capbtn" title="Dictate">🎙 <span class="caplabel">Dictate</span></button>' +
+        '<button id="photo" class="capbtn" title="Add photo">📷 <span class="caplabel">Photo</span></button>' +
+        '<button id="file" class="capbtn" title="Attach file">📎 <span class="caplabel">File</span></button>' +
       "</div>"
-    );
+    ));
+
+    const titleEl = root.querySelector("#e-title");
+    const bodyEl = root.querySelector("#e-body");
+    const stampEl = root.querySelector(".e-stamp");
+
+    autoGrow(bodyEl);
+    renderAttachments(root, note);
+    renderTagChips(root, note);
+
+    // --- autosave
+    function touch() {
+      note.title = titleEl.value;
+      note.body = bodyEl.value;
+      Store.saveNote(note);
+      stampEl.textContent = relDate(note.updated_at);
+    }
+    let saveTimer = null;
+    function debouncedSave() { clearTimeout(saveTimer); saveTimer = setTimeout(touch, 300); }
+    titleEl.addEventListener("input", debouncedSave);
+    bodyEl.addEventListener("input", function () { autoGrow(bodyEl); debouncedSave(); });
+
+    // --- back (discard if untouched/empty)
+    root.querySelector("#back").addEventListener("click", function () {
+      clearTimeout(saveTimer); touch();
+      if (Schema.isEmptyNote(note)) Store.removeNote(note.id);
+      location.hash = "#/";
+    });
+
+    // --- pin
+    root.querySelector("#pin").addEventListener("click", function (e) {
+      note.pinned = !note.pinned;
+      Store.saveNote(note);
+      e.target.textContent = note.pinned ? "📌" : "📍";
+    });
+
+    // --- delete
+    root.querySelector("#del").addEventListener("click", function () {
+      if (confirm("Delete this note?")) { Store.removeNote(note.id); location.hash = "#/"; }
+    });
+
+    // --- export
+    root.querySelector("#export").addEventListener("click", function () {
+      touch();
+      Exporter.download(Exporter.slug(note.title) + ".md", Exporter.noteToMarkdown(note), "text/markdown");
+    });
+
+    // --- organize (AI seam — next milestone)
+    root.querySelector("#organize").addEventListener("click", function () {
+      const panel = root.querySelector("#organize-panel");
+      panel.hidden = !panel.hidden;
+      panel.innerHTML =
+        '<div class="organize-inner">' +
+          "<strong>✨ Organize — shipping next</strong>" +
+          "<p>This will read your note and lay it out as a clean engineering decision " +
+          "(context, options, decision, reasoning, risks, follow-ups). Your original text " +
+          "is always kept underneath — organizing never overwrites what you wrote.</p>" +
+          "<p class=\"muted\">Powered by Claude. We'll wire it up in the next update.</p>" +
+        "</div>";
+    });
+
+    // --- project autosave
+    const projEl = root.querySelector("#e-project");
+    projEl.addEventListener("change", function () {
+      const p = Catalog.getOrCreateProject(projEl.value);
+      note.project_id = p ? p.id : null;
+      Store.saveNote(note);
+    });
+
+    // --- tags
+    const tagEl = root.querySelector("#e-tag");
+    tagEl.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && tagEl.value.trim()) {
+        e.preventDefault();
+        const t = Catalog.getOrCreateTag(tagEl.value);
+        if (t && (note.tag_ids || []).indexOf(t.id) < 0) {
+          note.tag_ids = (note.tag_ids || []).concat(t.id);
+          Store.saveNote(note);
+          renderTagChips(root, note);
+        }
+        tagEl.value = "";
+      }
+    });
+
+    // --- photo / file
+    root.querySelector("#photo").addEventListener("click", function () { pickFile(root, note, "image/*", true); });
+    root.querySelector("#file").addEventListener("click", function () { pickFile(root, note, "", false); });
+
+    // --- dictation
+    wireDictation(root, bodyEl, note, debouncedSave);
+
+    setStats();
+    setTimeout(function () { if (!note.title) titleEl.focus(); else bodyEl.focus(); }, 50);
   }
 
-  function field(label, control) {
-    return '<div class="field"><label>' + esc(label) + "</label>" + control + "</div>";
-  }
-
-  function statusSelect(current) {
-    return '<select name="status">' + Schema.STATUS
-      .filter(function (s) { return s !== "superseded"; }) // set via supersede flow only
-      .map(function (s) {
-        return '<option value="' + s + '"' + (s === current ? " selected" : "") + ">" + s + "</option>";
-      }).join("") + "</select>";
+  function autoGrow(ta) {
+    ta.style.height = "auto";
+    ta.style.height = Math.max(ta.scrollHeight, 200) + "px";
   }
 
   function projectDatalist() {
     return '<datalist id="project-list">' +
-      Store.listProjects().map(function (p) { return '<option value="' + esc(p.name) + '">'; }).join("") +
-      "</datalist>";
+      Store.listProjects().map(function (p) { return '<option value="' + esc(p.name) + '">'; }).join("") + "</datalist>";
   }
-
   function tagDatalist() {
     return '<datalist id="tag-list">' +
-      Store.listTags().map(function (t) { return '<option value="' + esc(t.name) + '">'; }).join("") +
-      "</datalist>";
+      Store.listTags().map(function (t) { return '<option value="' + esc(t.name) + '">'; }).join("") + "</datalist>";
   }
 
-  // --- structured risks (add/remove rows) ----------------------------------
-  function riskBlock(risks) {
-    return '<div class="field"><label>Risks</label>' +
-      '<div id="risk-rows">' + risks.map(riskRow).join("") + "</div>" +
-      '<button type="button" id="add-risk" class="btn btn-small">+ add risk</button>' +
-      "</div>";
-  }
-
-  function riskRow(r) {
-    r = r || { description: "", likelihood: "low", impact: "low", mitigation: "" };
-    const lvl = function (name, val) {
-      return '<select data-risk="' + name + '">' + Schema.LEVEL.map(function (l) {
-        return '<option value="' + l + '"' + (l === val ? " selected" : "") + ">" + l + "</option>";
-      }).join("") + "</select>";
-    };
-    return (
-      '<div class="risk-row">' +
-        '<input data-risk="description" type="text" placeholder="description" value="' + esc(r.description) + '" />' +
-        '<span class="lvl">L ' + lvl("likelihood", r.likelihood) + "</span>" +
-        '<span class="lvl">I ' + lvl("impact", r.impact) + "</span>" +
-        '<input data-risk="mitigation" type="text" placeholder="mitigation" value="' + esc(r.mitigation) + '" />' +
-        '<button type="button" class="btn btn-small rm-risk">✕</button>' +
-      "</div>"
-    );
-  }
-
-  // --- attachments (link in MVP; file/image read as data URL) --------------
-  function attachmentsBlock(attachments) {
-    return '<div class="field"><label>Attachments</label>' +
-      '<div id="att-rows">' + attachments.map(attRow).join("") + "</div>" +
-      '<div class="att-actions">' +
-        '<button type="button" id="add-link" class="btn btn-small">+ Link</button>' +
-        '<button type="button" id="add-file" class="btn btn-small">+ File / Image</button>' +
-      "</div></div>";
-  }
-
-  function attRow(a) {
-    const target = a.url || a.path;
-    return (
-      '<div class="att-row" data-type="' + esc(a.type) + '" data-url="' + esc(a.url) + '" data-mime="' + esc(a.mime_type) + '" data-size="' + esc(a.size_bytes) + '">' +
-        '<span class="att-icon">' + (a.type === "image" ? "🖼" : a.type === "file" ? "📄" : "🔗") + "</span>" +
-        '<input data-att="label" type="text" placeholder="label" value="' + esc(a.label) + '" />' +
-        (a.type === "link"
-          ? '<input data-att="url" type="url" placeholder="https://…" value="' + esc(a.url) + '" />'
-          : '<span class="att-name">' + esc(target.slice(0, 48)) + "</span>") +
-        '<button type="button" class="btn btn-small rm-att">✕</button>' +
-      "</div>"
-    );
-  }
-
-  const MAX_FILE_BYTES = 25 * 1024 * 1024; // §3.4 per-file cap
-
-  function wireFormDynamics(form, d) {
-    // risks
-    form.querySelector("#add-risk").addEventListener("click", function () {
-      form.querySelector("#risk-rows").appendChild(el(riskRow()));
-      bindRemovers(form);
-    });
-    // attachments — link
-    form.querySelector("#add-link").addEventListener("click", function () {
-      form.querySelector("#att-rows").appendChild(el(attRow(Schema.makeAttachment({ type: "link" }))));
-      bindRemovers(form);
-    });
-    // attachments — file/image
-    form.querySelector("#add-file").addEventListener("click", function () {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.addEventListener("change", function () {
-        const file = input.files[0];
-        if (!file) return;
-        if (file.size > MAX_FILE_BYTES) {
-          alert("File exceeds 25 MB cap: " + (file.size / 1048576).toFixed(1) + " MB");
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = function () {
-          const isImg = /^image\//.test(file.type);
-          const att = Schema.makeAttachment({
-            type: isImg ? "image" : "file",
-            label: file.name,
-            url: reader.result, // data URL (static MVP keeps bytes inline)
-            mime_type: file.type,
-            size_bytes: file.size,
-          });
-          form.querySelector("#att-rows").appendChild(el(attRow(att)));
-          bindRemovers(form);
-        };
-        reader.readAsDataURL(file);
+  function renderTagChips(root, note) {
+    const wrap = root.querySelector("#tag-chips");
+    if (!wrap) return;
+    const tags = (note.tag_ids || []).map(Catalog.getTag).filter(Boolean);
+    wrap.innerHTML = tags.map(function (t) {
+      return '<span class="chip removable" data-id="' + esc(t.id) + '">#' + esc(t.name) + ' <span class="x">×</span></span>';
+    }).join("");
+    wrap.querySelectorAll(".chip").forEach(function (c) {
+      c.querySelector(".x").addEventListener("click", function () {
+        const tid = c.getAttribute("data-id");
+        note.tag_ids = (note.tag_ids || []).filter(function (x) { return x !== tid; });
+        Store.saveNote(note);
+        renderTagChips(root, note);
       });
-      input.click();
-    });
-    bindRemovers(form);
-  }
-
-  function bindRemovers(form) {
-    form.querySelectorAll(".rm-risk").forEach(function (b) {
-      b.onclick = function () { b.closest(".risk-row").remove(); };
-    });
-    form.querySelectorAll(".rm-att").forEach(function (b) {
-      b.onclick = function () { b.closest(".att-row").remove(); };
     });
   }
 
-  // --- read the form back into a (partial) decision ------------------------
-  function collectForm(form, base) {
-    const get = function (name) {
-      const node = form.querySelector('[name="' + name + '"]');
-      return node ? node.value : "";
-    };
-    const risks = Array.prototype.map.call(form.querySelectorAll(".risk-row"), function (row) {
-      return Schema.makeRisk({
-        description: row.querySelector('[data-risk="description"]').value,
-        likelihood: row.querySelector('[data-risk="likelihood"]').value,
-        impact: row.querySelector('[data-risk="impact"]').value,
-        mitigation: row.querySelector('[data-risk="mitigation"]').value,
+  function pickFile(root, note, accept, isImage) {
+    const input = document.createElement("input");
+    input.type = "file";
+    if (accept) input.accept = accept;
+    if (isImage) input.capture = "environment"; // hint phones toward the camera
+    input.addEventListener("change", function () {
+      const file = input.files[0];
+      if (!file) return;
+      if (file.size > MAX_FILE_BYTES) {
+        alert("That file is " + (file.size / 1048576).toFixed(1) + " MB — over the 10 MB limit for in-browser storage.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = function () {
+        note.attachments = (note.attachments || []).concat(Schema.makeAttachment({
+          type: /^image\//.test(file.type) ? "image" : "file",
+          label: file.name,
+          url: reader.result,
+          mime_type: file.type,
+          size_bytes: file.size,
+        }));
+        Store.saveNote(note);
+        renderAttachments(root, note);
+      };
+      reader.readAsDataURL(file);
+    });
+    input.click();
+  }
+
+  function renderAttachments(root, note) {
+    const wrap = root.querySelector("#e-attachments");
+    if (!wrap) return;
+    const atts = note.attachments || [];
+    wrap.innerHTML = atts.map(function (a) {
+      const inner = a.type === "image"
+        ? '<img src="' + esc(a.url) + '" alt="' + esc(a.label) + '" />'
+        : '<a class="file-att" href="' + esc(a.url) + '" target="_blank" rel="noopener">📄 ' + esc(a.label || "file") + "</a>";
+      return '<div class="att" data-id="' + esc(a.id) + '">' + inner + '<button class="att-x" title="Remove">×</button></div>';
+    }).join("");
+    wrap.querySelectorAll(".att").forEach(function (node) {
+      node.querySelector(".att-x").addEventListener("click", function () {
+        const aid = node.getAttribute("data-id");
+        note.attachments = (note.attachments || []).filter(function (x) { return x.id !== aid; });
+        Store.saveNote(note);
+        renderAttachments(root, note);
       });
-    }).filter(function (r) { return r.description; });
-
-    const attachments = Array.prototype.map.call(form.querySelectorAll(".att-row"), function (row) {
-      const type = row.getAttribute("data-type");
-      const urlInput = row.querySelector('[data-att="url"]');
-      return Schema.makeAttachment({
-        type: type,
-        label: row.querySelector('[data-att="label"]').value,
-        url: type === "link" ? (urlInput ? urlInput.value : "") : row.getAttribute("data-url"),
-        mime_type: row.getAttribute("data-mime") || "",
-        size_bytes: parseInt(row.getAttribute("data-size") || "0", 10),
-      });
-    }).filter(function (a) { return a.url || a.path; });
-
-    return {
-      id: base.id,
-      title: get("title"),
-      context: get("context"),
-      chosen_option: get("chosen_option"),
-      reasoning: get("reasoning"),
-      options_considered: Schema.linesToList(get("options_considered")),
-      assumptions: Schema.linesToList(get("assumptions")),
-      risks: risks,
-      confidence: get("confidence") || base.confidence,
-      needs_review: form.querySelector('[name="needs_review"]').checked,
-      status: get("status") || base.status,
-      owner: get("owner"),
-      subsystem_name: get("subsystem_name"),
-      references: get("references"),
-      follow_up_actions: Schema.linesToList(get("follow_up_actions")),
-      notes: get("notes"),
-      attachments: attachments,
-      // catalog-bound fields resolved at save time:
-      _project_name: get("project_name"),
-      _tags_raw: get("tags"),
-      // preserved lineage:
-      supersedes: base.supersedes || null,
-      superseded_by: base.superseded_by || null,
-      date_created: base.date_created,
-      date_decided: base.date_decided,
-      status_history: base.status_history,
-      project_id: base.project_id,
-      tag_ids: base.tag_ids,
-    };
+    });
   }
 
-  function saveForm(form, base, existing, opts) {
-    const collected = collectForm(form, base);
-    if (!collected.title.trim()) {
-      alert("Title is required.");
+  // --- live dictation via Web Speech API (graceful if unsupported) ---------
+  function wireDictation(root, bodyEl, note, save) {
+    const micBtn = root.querySelector("#mic");
+    const SR = global.SpeechRecognition || global.webkitSpeechRecognition;
+    if (!SR) {
+      micBtn.disabled = true;
+      micBtn.title = "Dictation isn't supported in this browser";
+      micBtn.classList.add("disabled");
       return;
     }
+    let rec = null, listening = false, baseText = "";
 
-    // Resolve catalogs (get-or-create, normalized).
-    const proj = Catalog.getOrCreateProject(collected._project_name);
-    collected.project_id = proj ? proj.id : null;
-    collected.tag_ids = (collected._tags_raw || "")
-      .split(",")
-      .map(function (s) { return s.trim(); })
-      .filter(Boolean)
-      .map(function (name) { return Catalog.getOrCreateTag(name); })
-      .filter(Boolean)
-      .map(function (t) { return t.id; });
-    delete collected._project_name;
-    delete collected._tags_raw;
-
-    const decision = Schema.makeDecision(collected);
-
-    // Status history: append an event when status changes (or first save).
-    const prevStatus = existing ? existing.status : null;
-    if (!decision.status_history.length || prevStatus !== decision.status) {
-      decision.status_history = (existing ? existing.status_history.slice() : []);
-      decision.status_history.push(Schema.makeStatusEvent(decision.status));
-    }
-    if (decision.status === "decided" && !decision.date_decided) {
-      decision.date_decided = Schema.now();
-    }
-
-    Store.saveDecision(decision);
-
-    // Supersede flow: stamp the original (ARCHITECTURE.md §5.3).
-    if (opts && opts.supersedeOf) {
-      const orig = Store.getDecision(opts.supersedeOf.id);
-      if (orig) {
-        orig.superseded_by = decision.id;
-        orig.status = "superseded";
-        orig.status_history = orig.status_history.slice();
-        orig.status_history.push(Schema.makeStatusEvent("superseded"));
-        Store.saveDecision(orig);
-      }
-    }
-
-    global.localStorage.removeItem(DRAFT_KEY);
-    location.hash = "#/decision/" + decision.id;
-  }
-
-  // =========================================================================
-  // DETAIL VIEW (ARCHITECTURE.md §6.3)
-  // =========================================================================
-  function renderView(id) {
-    const root = app();
-    const d = Store.getDecision(id);
-    if (!d) {
-      root.innerHTML = '<div class="empty"><p>Decision not found.</p><a class="btn" href="#/">Back to list</a></div>';
-      return;
-    }
-    const project = Catalog.getProject(d.project_id);
-    const tags = Catalog.tagNames(d.tag_ids);
-
-    root.innerHTML = "";
-    root.appendChild(el(
-      '<div class="detail-actions">' +
-        '<a class="btn" href="#/edit/' + esc(d.id) + '">Edit</a>' +
-        '<a class="btn" href="#/supersede/' + esc(d.id) + '">Supersede</a>' +
-        '<button id="exp-md" class="btn">Export Markdown</button>' +
-        '<button id="exp-json" class="btn">Export JSON</button>' +
-        '<button id="del" class="btn btn-danger">Delete</button>' +
-        '<a class="btn" href="#/">Back</a>' +
-      "</div>"
-    ));
-
-    const superseded = d.status === "superseded" || d.superseded_by;
-    const parts = [];
-    parts.push('<h1' + (superseded ? ' class="struck"' : "") + ">" + esc(d.title || "(untitled)") + "</h1>");
-
-    const meta = [];
-    meta.push('<span class="badge st-' + esc(d.status) + '">' + esc(d.status) + "</span>");
-    meta.push('<span class="badge cf-' + esc(d.confidence) + '">confidence: ' + esc(d.confidence) + "</span>");
-    if (d.needs_review) meta.push('<span class="badge flag-badge">⚑ needs review</span>');
-    if (project) meta.push('<span class="meta-pill">project: ' + esc(project.name) + "</span>");
-    if (d.subsystem_name) meta.push('<span class="meta-pill">subsystem: ' + esc(d.subsystem_name) + "</span>");
-    parts.push('<div class="detail-meta">' + meta.join(" ") + "</div>");
-    if (tags.length) parts.push('<div class="detail-tags">' + tags.map(function (t) { return '<span class="chip">' + esc(t) + "</span>"; }).join("") + "</div>");
-
-    parts.push(section("Context", textBlock(d.context)));
-    if (d.options_considered.length) parts.push(section("Options Considered", ulist(d.options_considered)));
-    parts.push(section("Chosen Option", textBlock(d.chosen_option)));
-    parts.push(section("Reasoning", textBlock(d.reasoning)));
-    if (d.assumptions.length) parts.push(section("Assumptions", ulist(d.assumptions)));
-
-    if (d.risks.length) {
-      const rows = d.risks.map(function (r) {
-        return "<tr><td>" + esc(r.description) + "</td><td>" + esc(r.likelihood) + "</td><td>" + esc(r.impact) + "</td><td>" + esc(r.mitigation || "—") + "</td></tr>";
-      }).join("");
-      parts.push(section("Risks",
-        '<table class="risk-table"><thead><tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr></thead><tbody>' + rows + "</tbody></table>"));
-    }
-
-    if (d.references) parts.push(section("References", textBlock(d.references)));
-    if (d.follow_up_actions.length) parts.push(section("Follow-up Actions", ulist(d.follow_up_actions, true)));
-
-    if (d.status_history.length) {
-      parts.push(section("Status History",
-        '<p class="history">' + d.status_history.map(function (e) {
-          return esc(e.status) + " (" + dateShort(e.timestamp) + ")";
-        }).join(" → ") + "</p>"));
-    }
-
-    const lineage = [];
-    if (d.supersedes) lineage.push("Supersedes: " + linkTo(d.supersedes));
-    if (d.superseded_by) lineage.push("Superseded by: " + linkTo(d.superseded_by));
-    if (lineage.length) parts.push(section("Lineage", "<p>" + lineage.join(" · ") + "</p>"));
-
-    if (d.attachments.length) {
-      const items = d.attachments.map(function (a) {
-        const target = a.url || a.path;
-        if (a.type === "image") {
-          return '<div class="att-view"><img src="' + esc(target) + '" alt="' + esc(a.label) + '" /><span>' + esc(a.label) + "</span></div>";
+    function start() {
+      rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = navigator.language || "en-US";
+      baseText = bodyEl.value;
+      rec.onresult = function (e) {
+        let finalAdd = "", interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const tr = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalAdd += tr;
+          else interim += tr;
         }
-        const icon = a.type === "file" ? "📄" : "🔗";
-        return '<div class="att-view">' + icon + ' <a href="' + esc(target) + '" target="_blank" rel="noopener">' + esc(a.label || target) + "</a></div>";
-      }).join("");
-      parts.push(section("Attachments", items));
+        if (finalAdd) baseText = (baseText ? baseText.replace(/\s*$/, "") + " " : "") + finalAdd.trim();
+        bodyEl.value = baseText + (interim ? " " + interim : "");
+        autoGrow(bodyEl);
+        save();
+      };
+      rec.onerror = function () { stop(); };
+      rec.onend = function () { if (listening) { try { rec.start(); } catch (e) {} } };
+      try { rec.start(); listening = true; micBtn.classList.add("recording"); micBtn.innerHTML = '⏺ <span class="caplabel">Stop</span>'; }
+      catch (e) { listening = false; }
     }
-
-    if (d.notes) parts.push(section("Notes", textBlock(d.notes)));
-
-    root.appendChild(el('<article class="detail">' + parts.join("") + "</article>"));
-
-    root.querySelector("#exp-md").addEventListener("click", function () {
-      Exporter.download(Exporter.slug(d.title) + ".md", Exporter.decisionToMarkdown(d), "text/markdown");
-    });
-    root.querySelector("#exp-json").addEventListener("click", function () {
-      Exporter.download(Exporter.slug(d.title) + ".json", Exporter.decisionToJSON(d), "application/json");
-    });
-    root.querySelector("#del").addEventListener("click", function () {
-      if (confirm("Delete this decision? (History principle: prefer Supersede instead.)")) {
-        Store.removeDecision(d.id);
-        location.hash = "#/";
-      }
-    });
-
-    setStorageStats();
-  }
-
-  function section(title, body) {
-    return '<section class="block"><h2>' + esc(title) + "</h2>" + body + "</section>";
-  }
-  function textBlock(s) {
-    return '<p class="text">' + esc(s || "—").replace(/\n/g, "<br>") + "</p>";
-  }
-  function ulist(items, checkbox) {
-    return "<ul" + (checkbox ? ' class="todo"' : "") + ">" + items.map(function (i) {
-      return "<li>" + (checkbox ? "☐ " : "") + esc(i) + "</li>";
-    }).join("") + "</ul>";
-  }
-  function linkTo(id) {
-    const t = Store.getDecision(id);
-    return '<a href="#/decision/' + esc(id) + '">' + esc(t ? t.title : id) + "</a>";
+    function stop() {
+      listening = false;
+      if (rec) { try { rec.stop(); } catch (e) {} }
+      micBtn.classList.remove("recording");
+      micBtn.innerHTML = '🎙 <span class="caplabel">Dictate</span>';
+      save();
+    }
+    micBtn.addEventListener("click", function () { listening ? stop() : start(); });
   }
 
   global.UI = {
     renderList: renderList,
-    renderForm: renderForm,
-    renderView: renderView,
+    renderEditor: renderEditor,
   };
 })(window);

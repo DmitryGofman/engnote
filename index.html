@@ -2,31 +2,25 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Engineering Decision Log</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+  <title>EngNote</title>
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="#/">
-      <span class="brand-mark">⚙</span>
-      <span class="brand-text">Engineering Decision Log</span>
+      <span class="brand-mark">✎</span>
+      <span class="brand-text">EngNote</span>
     </a>
-    <nav class="topnav">
-      <a href="#/new" class="btn btn-primary">+ New Decision</a>
-    </nav>
   </header>
 
-  <main id="app" class="app-root">
-    <!-- Views are rendered here by js/ui.js -->
-  </main>
+  <main id="app" class="app-root"></main>
 
   <footer class="footer">
-    <span>Local-first MVP · data stays in your browser (localStorage)</span>
+    <span>Capture-first · local &amp; offline · your data stays in this browser</span>
     <span id="storage-stats"></span>
   </footer>
 
-  <!-- Load order matters: schema → storage → catalog → export → ui → app -->
   <script src="js/schema.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/catalog.js"></script>
