@@ -522,64 +522,70 @@
     });
   }
 
-  // --- organize panel (AI) --------------------------------------------------
+  // --- organize panel (offline by default; Claude optional) -----------------
   function renderOrganizePanel(root, note) {
     const panel = root.querySelector("#organize-panel");
     if (!panel) return;
-
-    if (!Organizer.hasKey()) {
-      panel.innerHTML =
-        '<div class="organize-inner">' +
-          "<strong>✨ Organize with Claude</strong>" +
-          "<p>Turn this note into a clean engineering decision — context, options, " +
-          "reasoning, risks. Your original text is always kept above.</p>" +
-          '<p class="muted">Paste your Claude API key to enable it. It is stored only in ' +
-          "this browser, on this device, and sent only to Claude.</p>" +
-          '<div class="key-row">' +
-            '<input id="org-key" type="password" placeholder="sk-ant-…" autocomplete="off" />' +
-            '<button id="org-key-save" class="btn btn-primary">Save key</button>' +
-          "</div>" +
-          '<p class="muted"><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get a key →</a></p>' +
-          '<div class="org-status"></div>' +
-        "</div>";
-      const input = panel.querySelector("#org-key");
-      panel.querySelector("#org-key-save").addEventListener("click", function () {
-        const k = input.value.trim();
-        if (!k) { setOrgStatus(panel, "Enter a key first.", true); return; }
-        Organizer.setKey(k);
-        renderOrganizePanel(root, note);
-      });
-      input.addEventListener("keydown", function (e) {
-        if (e.key === "Enter") panel.querySelector("#org-key-save").click();
-      });
-      return;
-    }
-
     const s = note.structured;
+    const hasKey = Organizer.hasKey();
+
     panel.innerHTML =
       '<div class="organize-inner">' +
         '<div class="org-head">' +
-          "<strong>✨ Organized decision</strong>" +
+          "<strong>✨ Organize</strong>" +
           '<span class="org-actions">' +
-            '<button id="org-run" class="btn btn-primary">' + (s ? "Re-organize" : "Organize this note") + "</button>" +
-            '<button id="org-forget" class="btn btn-small" title="Remove the stored API key">change key</button>' +
+            '<button id="org-local" class="btn btn-primary">' + (s ? "Re-organize" : "Organize") + "</button>" +
+            '<button id="org-claude" class="btn btn-small">✨ Smarter (Claude)</button>' +
           "</span>" +
+        "</div>" +
+        '<p class="muted">“Organize” works instantly offline — it sorts your note into a decision ' +
+        "layout. “Smarter (Claude)” rewrites and cleans it up with AI (needs an API key; sends the note to Claude).</p>" +
+        '<div id="org-keyform" class="key-form" hidden>' +
+          '<div class="key-row">' +
+            '<input id="org-key" type="password" placeholder="sk-ant-…" autocomplete="off" />' +
+            '<button id="org-key-save" class="btn btn-primary">Save &amp; run</button>' +
+          "</div>" +
+          '<p class="muted">Stored only in this browser, sent only to Claude. ' +
+          '<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get a key →</a></p>' +
         "</div>" +
         '<div class="org-status"></div>' +
         (s
           ? '<div class="org-result">' + mdToHtml(s.markdown) + "</div>" +
-            '<p class="muted org-meta">Generated ' + relDate(s.generated_at) + " · " + esc(s.model) +
-            " · your original note is kept above.</p>"
-          : '<p class="muted">Claude reads the note above and lays it out as a decision. ' +
-            "Your original text stays untouched.</p>") +
+            '<p class="muted org-meta">' +
+              (s.model === "local" ? "Organized offline (no AI)" : "Organized by " + esc(s.model)) +
+              " · " + relDate(s.generated_at) + " · original kept above." +
+              (hasKey ? ' · <a href="#" id="org-forget">remove key</a>' : "") +
+            "</p>"
+          : "") +
       "</div>";
 
-    panel.querySelector("#org-run").addEventListener("click", function () {
-      runOrganize(root, note, panel);
+    panel.querySelector("#org-local").addEventListener("click", function () {
+      runLocal(root, note, panel);
     });
-    panel.querySelector("#org-forget").addEventListener("click", function () {
-      Organizer.clearKey();
-      renderOrganizePanel(root, note);
+    panel.querySelector("#org-claude").addEventListener("click", function () {
+      if (Organizer.hasKey()) {
+        runOrganize(root, note, panel);
+      } else {
+        panel.querySelector("#org-keyform").hidden = false;
+        panel.querySelector("#org-key").focus();
+      }
+    });
+
+    const saveBtn = panel.querySelector("#org-key-save");
+    if (saveBtn) {
+      const input = panel.querySelector("#org-key");
+      saveBtn.addEventListener("click", function () {
+        const k = input.value.trim();
+        if (!k) { setOrgStatus(panel, "Enter a key first.", true); return; }
+        Organizer.setKey(k);
+        panel.querySelector("#org-keyform").hidden = true;
+        runOrganize(root, note, panel);
+      });
+      input.addEventListener("keydown", function (e) { if (e.key === "Enter") saveBtn.click(); });
+    }
+    const forget = panel.querySelector("#org-forget");
+    if (forget) forget.addEventListener("click", function (e) {
+      e.preventDefault(); Organizer.clearKey(); renderOrganizePanel(root, note);
     });
   }
 
@@ -590,8 +596,24 @@
     node.className = "org-status" + (isError ? " error" : "") + (msg ? " show" : "");
   }
 
+  // Offline organize — synchronous, no network.
+  function runLocal(root, note, panel) {
+    if (!(note.body || "").trim() && !(note.title || "").trim()) {
+      setOrgStatus(panel, "Write something first.", true);
+      return;
+    }
+    const result = Organizer.organizeLocal(note);
+    note.structured = Schema.makeStructured({
+      model: result.model,
+      source_body: note.body,
+      markdown: result.markdown,
+    });
+    Store.saveNote(note);
+    renderOrganizePanel(root, note);
+  }
+
   function runOrganize(root, note, panel) {
-    const btn = panel.querySelector("#org-run");
+    const btn = panel.querySelector("#org-claude");
     if (btn) btn.setAttribute("disabled", "true");
     setOrgStatus(panel, "Organizing… Claude is reading your note.");
     Organizer.organize(note).then(function (result) {
@@ -601,9 +623,13 @@
         markdown: result.markdown,
       });
       Store.saveNote(note);
-      renderOrganizePanel(root, note); // re-render with the result
+      renderOrganizePanel(root, note);
     }).catch(function (e) {
-      if (e && e.message === "NO_KEY") { renderOrganizePanel(root, note); return; }
+      if (e && e.message === "NO_KEY") {
+        panel.querySelector("#org-keyform").hidden = false;
+        if (btn) btn.removeAttribute("disabled");
+        return;
+      }
       setOrgStatus(panel, "⚠ " + (e && e.message ? e.message : "Something went wrong."), true);
       if (btn) btn.removeAttribute("disabled");
     });
