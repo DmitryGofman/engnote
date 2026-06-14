@@ -1,45 +1,54 @@
 # Quickstart
 
-This MVP is a static web app — no install, no build, no backend.
+EngNote is a static web app — no install, no build, no backend.
 
-## Option A — just open it
+## Use it now (no setup)
 
-Double-click `index.html` (or open it in your browser). Everything runs
-client-side and data persists in that browser's `localStorage`.
+Open the live app: **https://dmitrygofman.github.io/engnote/** — works on your phone.
 
-> Note: opening via `file://` works for all core features. If your browser
-> restricts anything under `file://`, use Option B.
+## Run it locally
 
-## Option B — serve it locally (recommended)
-
-Any static server works. With Python installed:
+Double-click `index.html`, or serve the folder:
 
 ```bash
 cd engnote
 python3 -m http.server 8000
+# open http://localhost:8000
 ```
 
-Then open <http://localhost:8000>.
+Serving (rather than `file://`) is recommended — some browsers restrict the
+microphone and camera on `file://`.
 
-## The 30-second loop
+## The loop
 
-1. Click **+ New Decision**.
-2. In **Quick Mode**, fill Title / Context / Chosen Option / Reasoning.
-3. **Save** → you land on the decision detail view.
-4. Back on the list, use the search box and status/project filters.
-5. Need more structure? Open a decision → **Edit** → toggle **Full Mode** for
-   risks, assumptions, tags, project, attachments, follow-ups.
-6. Changed your mind? Open the decision → **Supersede** → save the new one. The
-   original stays, struck-through, linked.
+1. Tap **+** to start a note.
+2. Type a title and **just write** — or tap **🎙 Dictate** and talk.
+3. Add a **📷 Photo** or **📎 File** (on a phone, the camera opens).
+4. Set a **Project** and add **#tags** — both autocomplete and create inline.
+5. Go **‹ Notes**. Everything autosaved. Empty notes are discarded automatically.
+6. On the list, search or filter by project / tag to find anything fast.
+
+## Voice notes
+
+Dictation uses your browser's built-in speech recognition. It works on most
+phones (Android Chrome, iOS Safari) and desktop Chrome/Edge. If your browser
+doesn't support it, the 🎙 button is disabled — typing still works everywhere.
 
 ## Getting data out / in
 
-- On a decision: **Export Markdown** or **Export JSON**.
-- On the list: **Export all (JSON)** for the whole corpus, and **Import** to
-  load a previously exported JSON document back in.
+- Per note: **⤓** exports Markdown (includes the organized version once that ships).
+- On the list: **Export** dumps everything as JSON; **Import** loads it back
+  (older "decision"-format exports auto-migrate to notes).
 
-## Where's the data?
+## Where's my data?
 
-In your browser's `localStorage` under the `engnote.v1` key, with rolling
-backups under `engnote.v1.backups`. Clearing site data wipes it — export first
-if it matters.
+In this browser's `localStorage` (key `engnote.v1`), with rolling backups under
+`engnote.v1.backups`. It's local to this device/browser. Clearing site data wipes
+it — export first if it matters. Attachments are stored inline, so keep images
+modest (10 MB cap each) until the backend phase.
+
+## Coming next: ✨ Organize
+
+Write freely, then tap **✨ Organize** to have Claude lay your note out as a clean
+engineering decision (context, options, reasoning, risks). Your original text is
+always kept. The button is in the editor now and previews what it'll do.
