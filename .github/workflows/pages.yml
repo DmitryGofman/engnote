@@ -2,7 +2,7 @@ name: Deploy static site to GitHub Pages
 
 on:
   push:
-    branches: ["claude/mvp-frontend-skeleton-6k9lul"]
+    branches: ["main", "claude/mvp-frontend-skeleton-6k9lul"]
   workflow_dispatch:
 
 # Permissions needed for the Pages deployment.
