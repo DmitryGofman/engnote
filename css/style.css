@@ -117,8 +117,25 @@ body {
 
 .organize-panel { margin-top: 16px; }
 .organize-inner { background: #fff8ec; border: 1px solid #f0e2c4; border-radius: 10px; padding: 14px 16px; }
-.organize-inner strong { display: block; margin-bottom: 6px; }
+.organize-inner > strong { display: block; margin-bottom: 6px; }
 .organize-inner p { margin: 6px 0; font-size: 14px; }
+.org-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.org-head strong { margin: 0; }
+.org-actions { display: flex; gap: 6px; align-items: center; }
+.key-row { display: flex; gap: 8px; margin: 8px 0; }
+.key-row input { flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 16px; }
+.org-status { font-size: 13px; margin-top: 8px; display: none; }
+.org-status.show { display: block; }
+.org-status.error { color: var(--danger); }
+.org-result { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-top: 10px; }
+.org-result h2, .org-result h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin: 14px 0 4px; }
+.org-result h2:first-child, .org-result h3:first-child { margin-top: 0; }
+.org-result p { font-size: 15px; margin: 4px 0; }
+.org-result ul { margin: 4px 0; padding-left: 20px; }
+.org-result table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+.org-result th, .org-result td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; }
+.org-result th { background: #faf8f2; color: var(--muted); }
+.org-meta { margin-top: 8px; }
 
 /* --- meta bar (project + tags) --- */
 .meta-bar { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 16px; margin-top: 14px; }
