@@ -43,11 +43,13 @@
 
   // --- Catalogs -------------------------------------------------------------
   function makeProject(name) {
-    return { id: uuid(), name: (name || "").trim(), created_at: now() };
+    const t = now();
+    return { id: uuid(), name: (name || "").trim(), created_at: t, last_used_at: t };
   }
 
   function makeTag(name) {
-    return { id: uuid(), name: (name || "").trim().toLowerCase(), created_at: now() };
+    const t = now();
+    return { id: uuid(), name: (name || "").trim().toLowerCase(), created_at: t, last_used_at: t };
   }
 
   // --- Attachment -----------------------------------------------------------
