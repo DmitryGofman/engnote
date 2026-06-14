@@ -176,8 +176,10 @@ note and lays it out in the engineering-decision format:
 1. **✅ Capture-first app** — note list, open editor, tags/project catalogs,
    image/file attachments, live dictation, search/filter, export/import,
    auto-backup, v1→v2 migration.
-2. **▶ Organize (AI)** — "Organize this note" → Claude → decision-format markdown
-   stored in `structured`, raw body preserved, re-runnable.
+2. **✅ Organize (AI)** — "Organize this note" → Claude (`claude-opus-4-8`) →
+   decision-format markdown stored in `structured`, raw body preserved, re-runnable.
+   Browser → Claude direct call with the user's own key (localStorage); moves
+   server-side in the backend phase.
 3. Filtered/bundled export; richer structured rendering (typed risk table, etc.).
 4. Backend phase: move storage + attachments + the API key off the browser.
 

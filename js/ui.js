@@ -13,6 +13,7 @@
   const Catalog = global.Catalog;
   const Schema = global.Schema;
   const Exporter = global.Exporter;
+  const Organizer = global.Organizer;
 
   const app = function () { return document.getElementById("app"); };
 
@@ -289,19 +290,13 @@
       Exporter.download(Exporter.slug(note.title) + ".md", Exporter.noteToMarkdown(note), "text/markdown");
     });
 
-    // --- organize (AI seam — next milestone)
+    // --- organize (AI) — toggle the panel; auto-open if already organized
+    const orgPanel = root.querySelector("#organize-panel");
     root.querySelector("#organize").addEventListener("click", function () {
-      const panel = root.querySelector("#organize-panel");
-      panel.hidden = !panel.hidden;
-      panel.innerHTML =
-        '<div class="organize-inner">' +
-          "<strong>✨ Organize — shipping next</strong>" +
-          "<p>This will read your note and lay it out as a clean engineering decision " +
-          "(context, options, decision, reasoning, risks, follow-ups). Your original text " +
-          "is always kept underneath — organizing never overwrites what you wrote.</p>" +
-          "<p class=\"muted\">Powered by Claude. We'll wire it up in the next update.</p>" +
-        "</div>";
+      orgPanel.hidden = !orgPanel.hidden;
+      if (!orgPanel.hidden) renderOrganizePanel(root, note);
     });
+    if (note.structured) { orgPanel.hidden = false; renderOrganizePanel(root, note); }
 
     // --- project autocomplete (single select)
     setupAutocomplete(root.querySelector("#ac-project"), {
@@ -525,6 +520,153 @@
         renderAttachments(root, note);
       });
     });
+  }
+
+  // --- organize panel (AI) --------------------------------------------------
+  function renderOrganizePanel(root, note) {
+    const panel = root.querySelector("#organize-panel");
+    if (!panel) return;
+
+    if (!Organizer.hasKey()) {
+      panel.innerHTML =
+        '<div class="organize-inner">' +
+          "<strong>✨ Organize with Claude</strong>" +
+          "<p>Turn this note into a clean engineering decision — context, options, " +
+          "reasoning, risks. Your original text is always kept above.</p>" +
+          '<p class="muted">Paste your Claude API key to enable it. It is stored only in ' +
+          "this browser, on this device, and sent only to Claude.</p>" +
+          '<div class="key-row">' +
+            '<input id="org-key" type="password" placeholder="sk-ant-…" autocomplete="off" />' +
+            '<button id="org-key-save" class="btn btn-primary">Save key</button>' +
+          "</div>" +
+          '<p class="muted"><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get a key →</a></p>' +
+          '<div class="org-status"></div>' +
+        "</div>";
+      const input = panel.querySelector("#org-key");
+      panel.querySelector("#org-key-save").addEventListener("click", function () {
+        const k = input.value.trim();
+        if (!k) { setOrgStatus(panel, "Enter a key first.", true); return; }
+        Organizer.setKey(k);
+        renderOrganizePanel(root, note);
+      });
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") panel.querySelector("#org-key-save").click();
+      });
+      return;
+    }
+
+    const s = note.structured;
+    panel.innerHTML =
+      '<div class="organize-inner">' +
+        '<div class="org-head">' +
+          "<strong>✨ Organized decision</strong>" +
+          '<span class="org-actions">' +
+            '<button id="org-run" class="btn btn-primary">' + (s ? "Re-organize" : "Organize this note") + "</button>" +
+            '<button id="org-forget" class="btn btn-small" title="Remove the stored API key">change key</button>' +
+          "</span>" +
+        "</div>" +
+        '<div class="org-status"></div>' +
+        (s
+          ? '<div class="org-result">' + mdToHtml(s.markdown) + "</div>" +
+            '<p class="muted org-meta">Generated ' + relDate(s.generated_at) + " · " + esc(s.model) +
+            " · your original note is kept above.</p>"
+          : '<p class="muted">Claude reads the note above and lays it out as a decision. ' +
+            "Your original text stays untouched.</p>") +
+      "</div>";
+
+    panel.querySelector("#org-run").addEventListener("click", function () {
+      runOrganize(root, note, panel);
+    });
+    panel.querySelector("#org-forget").addEventListener("click", function () {
+      Organizer.clearKey();
+      renderOrganizePanel(root, note);
+    });
+  }
+
+  function setOrgStatus(panel, msg, isError) {
+    const node = panel.querySelector(".org-status");
+    if (!node) return;
+    node.textContent = msg || "";
+    node.className = "org-status" + (isError ? " error" : "") + (msg ? " show" : "");
+  }
+
+  function runOrganize(root, note, panel) {
+    const btn = panel.querySelector("#org-run");
+    if (btn) btn.setAttribute("disabled", "true");
+    setOrgStatus(panel, "Organizing… Claude is reading your note.");
+    Organizer.organize(note).then(function (result) {
+      note.structured = Schema.makeStructured({
+        model: result.model,
+        source_body: note.body,
+        markdown: result.markdown,
+      });
+      Store.saveNote(note);
+      renderOrganizePanel(root, note); // re-render with the result
+    }).catch(function (e) {
+      if (e && e.message === "NO_KEY") { renderOrganizePanel(root, note); return; }
+      setOrgStatus(panel, "⚠ " + (e && e.message ? e.message : "Something went wrong."), true);
+      if (btn) btn.removeAttribute("disabled");
+    });
+  }
+
+  // --- compact Markdown → HTML (headings, bold, lists, checkboxes, tables) ---
+  function mdToHtml(md) {
+    const lines = (md || "").replace(/```/g, "").split("\n");
+    const out = [];
+    let i = 0;
+    const inline = function (t) {
+      return esc(t).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    };
+    while (i < lines.length) {
+      let line = lines[i];
+
+      // table: header row, separator, then body rows
+      if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+        const cells = function (row) {
+          return row.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(function (c) { return c.trim(); });
+        };
+        const head = cells(line);
+        i += 2;
+        let html = "<table><thead><tr>" + head.map(function (h) { return "<th>" + inline(h) + "</th>"; }).join("") + "</tr></thead><tbody>";
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+          html += "<tr>" + cells(lines[i]).map(function (c) { return "<td>" + inline(c) + "</td>"; }).join("") + "</tr>";
+          i++;
+        }
+        out.push(html + "</tbody></table>");
+        continue;
+      }
+
+      // heading
+      const h = line.match(/^(#{1,4})\s+(.*)$/);
+      if (h) { const lvl = Math.min(h[1].length + 1, 6); out.push("<h" + lvl + ">" + inline(h[2]) + "</h" + lvl + ">"); i++; continue; }
+
+      // list block (bullets / checkboxes / numbered)
+      if (/^\s*([-*]|\d+\.)\s+/.test(line)) {
+        let html = "<ul>";
+        while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])) {
+          let item = lines[i].replace(/^\s*([-*]|\d+\.)\s+/, "");
+          let box = "";
+          const cb = item.match(/^\[( |x|X)\]\s+(.*)$/);
+          if (cb) { box = cb[1].toLowerCase() === "x" ? "☑ " : "☐ "; item = cb[2]; }
+          html += "<li>" + box + inline(item) + "</li>";
+          i++;
+        }
+        out.push(html + "</ul>");
+        continue;
+      }
+
+      // blank line
+      if (!line.trim()) { i++; continue; }
+
+      // paragraph (gather until blank / block start)
+      let para = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|\s*([-*]|\d+\.)\s|\s*\|)/.test(lines[i])) {
+        para.push(lines[i]); i++;
+      }
+      out.push("<p>" + para.map(inline).join("<br>") + "</p>");
+    }
+    return out.join("\n");
   }
 
   // --- live dictation via Web Speech API ------------------------------------

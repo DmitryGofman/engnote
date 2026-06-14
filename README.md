@@ -42,11 +42,18 @@ engnote/
 - **Auto-backup** — rolling snapshots before each write.
 - **Mobile-first** — fixed capture bar, big touch targets, safe-area aware.
 
-## Coming next
+## ✨ Organize (AI)
 
-- **✨ Organize** — Claude reads your note and produces the structured decision
-  format; your raw text is preserved. The button is already in the editor and
-  explains itself; the generator lands in the next update.
+Tap **✨ Organize** in the editor and Claude turns your freeform note into a clean
+engineering decision — context, options, decision, reasoning, a risk table, and
+follow-ups. Your **original note is always kept** above the result, and you can
+re-organize anytime.
+
+Because this is a static app with no backend, the call goes directly from your
+browser to Claude using **your own API key** (paste it once; it's stored only in
+your browser, on your device, and sent only to Claude). Model: `claude-opus-4-8`.
+When the backend phase lands, the key moves server-side. Capture and storage stay
+fully local and offline — only Organize reaches the network.
 
 ## Run it
 
