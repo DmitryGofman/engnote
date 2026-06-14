@@ -17,4 +17,11 @@
   global.addEventListener("hashchange", route);
   global.addEventListener("DOMContentLoaded", route);
   if (document.readyState !== "loading") route();
+
+  // Register the service worker for offline + install-to-home-screen.
+  if ("serviceWorker" in navigator) {
+    global.addEventListener("load", function () {
+      navigator.serviceWorker.register("sw.js").catch(function () { /* offline mode just won't be available */ });
+    });
+  }
 })(window);

@@ -58,6 +58,18 @@ anytime. Two engines:
   this browser, on this device, sent only to Claude). This is the one feature that
   reaches the network; capture and storage stay fully local.
 
+## Install on your phone (PWA)
+
+EngNote is an installable Progressive Web App: open
+https://dmitrygofman.github.io/engnote/ on your phone →
+
+- **iPhone (Safari):** Share → *Add to Home Screen*.
+- **Android (Chrome):** menu → *Install app* / *Add to Home screen*.
+
+It then launches full-screen from its own icon and works offline (a service
+worker caches the app shell; your notes are already local). Going online pulls
+the latest version automatically.
+
 ## Run it
 
 No toolchain — see `QUICKSTART.md`. Open `index.html`, or serve the folder.

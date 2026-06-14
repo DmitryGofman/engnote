@@ -1,0 +1,16 @@
+{
+  "name": "EngNote — Engineering Decisions",
+  "short_name": "EngNote",
+  "description": "Capture-first engineering decision notes. Write or dictate, tag, attach, and organize.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#faf9f6",
+  "theme_color": "#e8a33d",
+  "icons": [
+    { "src": "icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "icon-512.png", "type": "image/png", "sizes": "512x512" },
+    { "src": "icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}
