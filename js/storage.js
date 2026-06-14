@@ -76,17 +76,47 @@
     doc.schema_version = global.Schema.SCHEMA_VERSION;
     doc.updated_at = global.Schema.now();
     snapshot(doc);
-    global.localStorage.setItem(KEY, JSON.stringify(doc));
+    try {
+      global.localStorage.setItem(KEY, JSON.stringify(doc));
+    } catch (e) {
+      // Out of space — drop backups (they're a safety net, not the data) and retry.
+      try { global.localStorage.removeItem(BACKUP_KEY); } catch (e2) {}
+      try {
+        global.localStorage.setItem(KEY, JSON.stringify(doc));
+      } catch (e3) {
+        throw new Error("QUOTA: browser storage is full. Remove some photos/files or export, then retry.");
+      }
+    }
   }
 
+  // Backups keep only attachment METADATA, never the inline bytes — otherwise a
+  // few photos × 10 snapshots would blow the storage budget (ARCHITECTURE.md §3:
+  // attachments are excluded from the every-write backup).
   function snapshot(doc) {
     try {
+      const lite = {
+        schema_version: doc.schema_version,
+        updated_at: doc.updated_at,
+        projects: doc.projects,
+        tags: doc.tags,
+        notes: doc.notes.map(function (n) {
+          const copy = Object.assign({}, n);
+          copy.attachments = (n.attachments || []).map(function (a) {
+            const m = Object.assign({}, a);
+            m.url = a.url && a.url.indexOf("data:") === 0 ? "" : a.url; // strip inline bytes
+            return m;
+          });
+          return copy;
+        }),
+      };
       const raw = global.localStorage.getItem(BACKUP_KEY);
       const backups = raw ? JSON.parse(raw) : [];
-      backups.push({ at: global.Schema.now(), doc: doc });
+      backups.push({ at: global.Schema.now(), doc: lite });
       while (backups.length > MAX_BACKUPS) backups.shift();
       global.localStorage.setItem(BACKUP_KEY, JSON.stringify(backups));
     } catch (e) {
+      // Backups are best-effort; never block a write on them.
+      try { global.localStorage.removeItem(BACKUP_KEY); } catch (e2) {}
       console.warn("Backup skipped:", e);
     }
   }
@@ -119,6 +149,16 @@
   function listTags() { return load().tags.slice(); }
   function addProject(p) { load().projects.push(p); persist(); return p; }
   function addTag(t) { load().tags.push(t); persist(); return t; }
+
+  // Bump recency so autocomplete can surface most-recently-used first.
+  function touchProject(id) {
+    const p = load().projects.find(function (x) { return x.id === id; });
+    if (p) { p.last_used_at = global.Schema.now(); persist(); }
+  }
+  function touchTag(id) {
+    const t = load().tags.find(function (x) { return x.id === id; });
+    if (t) { t.last_used_at = global.Schema.now(); persist(); }
+  }
 
   // --- Whole-document import/export ----------------------------------------
   function exportDoc() { return JSON.parse(JSON.stringify(load())); }
@@ -156,6 +196,8 @@
     listTags: listTags,
     addProject: addProject,
     addTag: addTag,
+    touchProject: touchProject,
+    touchTag: touchTag,
     exportDoc: exportDoc,
     importDoc: importDoc,
     stats: stats,

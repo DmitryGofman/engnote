@@ -130,6 +130,29 @@ body {
 .chip.removable { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; }
 .chip .x { cursor: pointer; font-weight: 700; }
 
+/* --- autocomplete dropdown --- */
+.ac { position: relative; flex: 1; min-width: 120px; }
+.ac .meta-input { width: 100%; }
+.ac-menu {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 40;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: var(--shadow); overflow: hidden; max-height: 240px; overflow-y: auto;
+}
+.ac-item { padding: 10px 14px; font-size: 15px; cursor: pointer; }
+.ac-item:hover, .ac-item:active { background: #f5f3ee; }
+.ac-create { color: var(--accent-ink); background: #fff8ec; font-weight: 600; }
+.ac-create:hover { background: #fdeccd; }
+
+/* --- toast --- */
+.toast {
+  position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%) translateY(16px);
+  background: #2b2b2b; color: #fff; padding: 10px 16px; border-radius: 22px;
+  font-size: 13px; max-width: 88%; text-align: center; z-index: 60;
+  opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
 /* --- bottom capture toolbar --- */
 .capture-bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 25;

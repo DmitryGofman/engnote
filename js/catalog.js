@@ -43,9 +43,14 @@
     return Store.listProjects().find(function (p) { return p.id === id; }) || null;
   }
 
+  // Most-recently-used first, so the projects you keep using float to the top.
+  function byRecent(a, b) {
+    return (b.last_used_at || b.created_at || "").localeCompare(a.last_used_at || a.created_at || "");
+  }
+
   function searchProjects(query) {
     const q = normProject(query).toLowerCase();
-    const all = Store.listProjects();
+    const all = Store.listProjects().sort(byRecent);
     if (!q) return all;
     return all.filter(function (p) { return p.name.toLowerCase().indexOf(q) >= 0; });
   }
@@ -72,7 +77,7 @@
 
   function searchTags(query) {
     const q = normTag(query);
-    const all = Store.listTags();
+    const all = Store.listTags().sort(byRecent);
     if (!q) return all;
     return all.filter(function (t) { return t.name.indexOf(q) >= 0; });
   }

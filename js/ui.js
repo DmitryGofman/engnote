@@ -39,6 +39,16 @@
     const body = (n.body || "").replace(/\s+/g, " ").trim();
     return body.slice(0, 140);
   }
+  let toastTimer = null;
+  function toast(msg) {
+    let t = document.getElementById("toast");
+    if (!t) { t = document.createElement("div"); t.id = "toast"; t.className = "toast"; document.body.appendChild(t); }
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 3500);
+  }
+
   function setStats() {
     const s = Store.stats();
     const node = document.getElementById("storage-stats");
@@ -205,17 +215,22 @@
     );
     root.appendChild(editor);
 
-    // --- chips bar (project + tags) sits just above the bottom toolbar
+    // --- chips bar (project + tags) sits just above the bottom toolbar.
+    // Each field has a custom type-ahead dropdown (no flaky native datalist).
     root.appendChild(el(
       '<div class="meta-bar">' +
         '<div class="meta-row"><span class="meta-label">Project</span>' +
-          '<input id="e-project" class="meta-input" type="text" list="project-list" placeholder="none" value="' + esc((Catalog.getProject(note.project_id) || {}).name || "") + '" />' +
-          projectDatalist() +
+          '<div class="ac" id="ac-project">' +
+            '<input id="e-project" class="meta-input" type="text" autocomplete="off" placeholder="none" value="' + esc((Catalog.getProject(note.project_id) || {}).name || "") + '" />' +
+            '<div class="ac-menu" hidden></div>' +
+          "</div>" +
         "</div>" +
         '<div class="meta-row"><span class="meta-label">Tags</span>' +
           '<div id="tag-chips" class="tag-chips"></div>' +
-          '<input id="e-tag" class="meta-input" type="text" list="tag-list" placeholder="add tag + Enter" />' +
-          tagDatalist() +
+          '<div class="ac" id="ac-tag">' +
+            '<input id="e-tag" class="meta-input" type="text" autocomplete="off" placeholder="add tag…" />' +
+            '<div class="ac-menu" hidden></div>' +
+          "</div>" +
         "</div>" +
       "</div>"
     ));
@@ -288,32 +303,38 @@
         "</div>";
     });
 
-    // --- project autosave
-    const projEl = root.querySelector("#e-project");
-    projEl.addEventListener("change", function () {
-      const p = Catalog.getOrCreateProject(projEl.value);
-      note.project_id = p ? p.id : null;
-      Store.saveNote(note);
+    // --- project autocomplete (single select)
+    setupAutocomplete(root.querySelector("#ac-project"), {
+      search: function (q) { return Catalog.searchProjects(q); },
+      onPick: function (project) {
+        note.project_id = project.id;
+        Store.touchProject(project.id);
+        Store.saveNote(note);
+        root.querySelector("#e-project").value = project.name;
+      },
+      onCreate: function (name) {
+        const p = Catalog.getOrCreateProject(name);
+        if (p) { note.project_id = p.id; Store.saveNote(note); root.querySelector("#e-project").value = p.name; }
+      },
+      onClear: function () { note.project_id = null; Store.saveNote(note); },
     });
 
-    // --- tags
-    const tagEl = root.querySelector("#e-tag");
-    tagEl.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && tagEl.value.trim()) {
-        e.preventDefault();
-        const t = Catalog.getOrCreateTag(tagEl.value);
-        if (t && (note.tag_ids || []).indexOf(t.id) < 0) {
-          note.tag_ids = (note.tag_ids || []).concat(t.id);
-          Store.saveNote(note);
-          renderTagChips(root, note);
-        }
-        tagEl.value = "";
-      }
+    // --- tag autocomplete (multi select → chips)
+    setupAutocomplete(root.querySelector("#ac-tag"), {
+      clearOnPick: true,
+      search: function (q) {
+        return Catalog.searchTags(q).filter(function (t) { return (note.tag_ids || []).indexOf(t.id) < 0; });
+      },
+      onPick: function (tag) { addTagToNote(root, note, tag.id); },
+      onCreate: function (name) {
+        const t = Catalog.getOrCreateTag(name);
+        if (t) addTagToNote(root, note, t.id);
+      },
     });
 
     // --- photo / file
-    root.querySelector("#photo").addEventListener("click", function () { pickFile(root, note, "image/*", true); });
-    root.querySelector("#file").addEventListener("click", function () { pickFile(root, note, "", false); });
+    root.querySelector("#photo").addEventListener("click", function () { pickFiles(root, note, "image/*"); });
+    root.querySelector("#file").addEventListener("click", function () { pickFiles(root, note, ""); });
 
     // --- dictation
     wireDictation(root, bodyEl, note, debouncedSave);
@@ -327,13 +348,72 @@
     ta.style.height = Math.max(ta.scrollHeight, 200) + "px";
   }
 
-  function projectDatalist() {
-    return '<datalist id="project-list">' +
-      Store.listProjects().map(function (p) { return '<option value="' + esc(p.name) + '">'; }).join("") + "</datalist>";
+  function addTagToNote(root, note, tagId) {
+    if ((note.tag_ids || []).indexOf(tagId) >= 0) return;
+    note.tag_ids = (note.tag_ids || []).concat(tagId);
+    Store.touchTag(tagId);
+    Store.saveNote(note);
+    renderTagChips(root, note);
   }
-  function tagDatalist() {
-    return '<datalist id="tag-list">' +
-      Store.listTags().map(function (t) { return '<option value="' + esc(t.name) + '">'; }).join("") + "</datalist>";
+
+  // --- reusable type-ahead dropdown ----------------------------------------
+  // opts: { search(q)->[{id,name}], onPick(item), onCreate(name), onClear(), clearOnPick }
+  function setupAutocomplete(wrap, opts) {
+    const input = wrap.querySelector(".meta-input");
+    const menu = wrap.querySelector(".ac-menu");
+
+    function close() { menu.hidden = true; menu.innerHTML = ""; }
+
+    function open() {
+      const q = input.value.trim();
+      const matches = opts.search(q).slice(0, 8);
+      const rows = [];
+      matches.forEach(function (m) {
+        rows.push('<div class="ac-item" data-id="' + esc(m.id) + '">' + esc(m.name) + "</div>");
+      });
+      // Offer "Create" when the typed name doesn't exactly match an existing one.
+      const exact = matches.some(function (m) { return m.name.toLowerCase() === q.toLowerCase(); });
+      if (q && !exact && opts.onCreate) {
+        rows.push('<div class="ac-item ac-create" data-create="1">Create “' + esc(q) + '”</div>');
+      }
+      if (!rows.length) { close(); return; }
+      menu.innerHTML = rows.join("");
+      menu.hidden = false;
+      menu.querySelectorAll(".ac-item").forEach(function (item) {
+        // pointerdown (not click) so it fires before the input's blur closes the menu
+        item.addEventListener("pointerdown", function (e) {
+          e.preventDefault();
+          if (item.getAttribute("data-create")) {
+            opts.onCreate(input.value.trim());
+          } else {
+            const id = item.getAttribute("data-id");
+            const picked = opts.search("").find(function (x) { return x.id === id; });
+            if (picked) opts.onPick(picked);
+          }
+          if (opts.clearOnPick) input.value = "";
+          close();
+        });
+      });
+    }
+
+    input.addEventListener("focus", open);
+    input.addEventListener("input", function () {
+      if (opts.onClear && !input.value.trim()) opts.onClear();
+      open();
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const q = input.value.trim();
+        if (!q) return;
+        const existing = opts.search(q).find(function (x) { return x.name.toLowerCase() === q.toLowerCase(); });
+        if (existing) opts.onPick(existing);
+        else if (opts.onCreate) opts.onCreate(q);
+        if (opts.clearOnPick) input.value = "";
+        close();
+      } else if (e.key === "Escape") { close(); }
+    });
+    input.addEventListener("blur", function () { setTimeout(close, 150); });
   }
 
   function renderTagChips(root, note) {
@@ -353,33 +433,78 @@
     });
   }
 
-  function pickFile(root, note, accept, isImage) {
+  // Add one or more files. Images are downscaled/compressed so several fit in
+  // the browser's small storage budget; a clear message shows if it fills up.
+  function pickFiles(root, note, accept) {
     const input = document.createElement("input");
     input.type = "file";
+    input.multiple = true; // allow picking several at once
     if (accept) input.accept = accept;
-    if (isImage) input.capture = "environment"; // hint phones toward the camera
     input.addEventListener("change", function () {
-      const file = input.files[0];
-      if (!file) return;
-      if (file.size > MAX_FILE_BYTES) {
-        alert("That file is " + (file.size / 1048576).toFixed(1) + " MB — over the 10 MB limit for in-browser storage.");
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = function () {
-        note.attachments = (note.attachments || []).concat(Schema.makeAttachment({
-          type: /^image\//.test(file.type) ? "image" : "file",
-          label: file.name,
-          url: reader.result,
-          mime_type: file.type,
-          size_bytes: file.size,
-        }));
-        Store.saveNote(note);
-        renderAttachments(root, note);
-      };
-      reader.readAsDataURL(file);
+      const files = Array.prototype.slice.call(input.files || []);
+      if (!files.length) return;
+      let i = 0;
+      (function next() {
+        if (i >= files.length) return;
+        const file = files[i++];
+        const done = function () { renderAttachments(root, note); next(); };
+        if (file.size > MAX_FILE_BYTES && !/^image\//.test(file.type)) {
+          alert('"' + file.name + '" is ' + (file.size / 1048576).toFixed(1) + " MB — over the 10 MB limit.");
+          return next();
+        }
+        const isImage = /^image\//.test(file.type);
+        const handle = function (dataUrl, bytes, mime) {
+          try {
+            note.attachments = (note.attachments || []).concat(Schema.makeAttachment({
+              type: isImage ? "image" : "file",
+              label: file.name,
+              url: dataUrl,
+              mime_type: mime || file.type,
+              size_bytes: bytes || file.size,
+            }));
+            Store.saveNote(note);
+            done();
+          } catch (err) {
+            // Roll back the just-added attachment if the save overflowed storage.
+            note.attachments = (note.attachments || []).slice(0, -1);
+            alert(err && /QUOTA/.test(err.message)
+              ? "Storage is full — couldn't add \"" + file.name + "\". Remove some photos or export, then try again."
+              : "Couldn't add \"" + file.name + "\": " + (err && err.message));
+          }
+        };
+        if (isImage) compressImage(file, handle);
+        else { const r = new FileReader(); r.onload = function () { handle(r.result); }; r.readAsDataURL(file); }
+      })();
     });
     input.click();
+  }
+
+  // Downscale to <=1600px on the long edge and re-encode as JPEG (~0.82) to keep
+  // photos small enough that several survive localStorage. Falls back to the raw
+  // file if anything goes wrong.
+  function compressImage(file, cb) {
+    const reader = new FileReader();
+    reader.onload = function () {
+      const img = new Image();
+      img.onload = function () {
+        try {
+          const MAX = 1600;
+          let w = img.width, h = img.height;
+          if (Math.max(w, h) > MAX) {
+            const s = MAX / Math.max(w, h);
+            w = Math.round(w * s); h = Math.round(h * s);
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+          const out = canvas.toDataURL("image/jpeg", 0.82);
+          cb(out, Math.round(out.length * 0.75), "image/jpeg");
+        } catch (e) { cb(reader.result); }
+      };
+      img.onerror = function () { cb(reader.result); };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
   }
 
   function renderAttachments(root, note) {
@@ -402,17 +527,26 @@
     });
   }
 
-  // --- live dictation via Web Speech API (graceful if unsupported) ---------
+  // --- live dictation via Web Speech API ------------------------------------
+  // Not all browsers ship it (notably iOS Safari). Instead of a dead button, we
+  // explain the fallback: most phone keyboards have their own dictation mic.
   function wireDictation(root, bodyEl, note, save) {
     const micBtn = root.querySelector("#mic");
     const SR = global.SpeechRecognition || global.webkitSpeechRecognition;
+
     if (!SR) {
-      micBtn.disabled = true;
-      micBtn.title = "Dictation isn't supported in this browser";
       micBtn.classList.add("disabled");
+      micBtn.addEventListener("click", function () {
+        bodyEl.focus();
+        toast("In-app dictation isn't supported here. Tap the 🎤 on your keyboard to dictate.");
+      });
       return;
     }
+
     let rec = null, listening = false, baseText = "";
+
+    function setIdle() { micBtn.classList.remove("recording"); micBtn.innerHTML = '🎙 <span class="caplabel">Dictate</span>'; }
+    function setBusy() { micBtn.classList.add("recording"); micBtn.innerHTML = '⏺ <span class="caplabel">Stop</span>'; }
 
     function start() {
       rec = new SR();
@@ -432,18 +566,20 @@
         autoGrow(bodyEl);
         save();
       };
-      rec.onerror = function () { stop(); };
-      rec.onend = function () { if (listening) { try { rec.start(); } catch (e) {} } };
-      try { rec.start(); listening = true; micBtn.classList.add("recording"); micBtn.innerHTML = '⏺ <span class="caplabel">Stop</span>'; }
-      catch (e) { listening = false; }
+      rec.onerror = function (e) {
+        if (e && (e.error === "not-allowed" || e.error === "service-not-allowed")) {
+          toast("Microphone blocked. Allow mic access in your browser settings.");
+        } else if (e && e.error === "no-speech") {
+          toast("Didn't catch anything — try again.");
+        }
+        listening = false; setIdle();
+      };
+      rec.onend = function () { if (listening) { try { rec.start(); } catch (e) {} } else setIdle(); };
+      try { rec.start(); listening = true; setBusy(); toast("Listening… tap again to stop."); }
+      catch (e) { listening = false; setIdle(); toast("Couldn't start dictation: " + (e && e.message)); }
     }
-    function stop() {
-      listening = false;
-      if (rec) { try { rec.stop(); } catch (e) {} }
-      micBtn.classList.remove("recording");
-      micBtn.innerHTML = '🎙 <span class="caplabel">Dictate</span>';
-      save();
-    }
+    function stop() { listening = false; if (rec) { try { rec.stop(); } catch (e) {} } setIdle(); save(); }
+
     micBtn.addEventListener("click", function () { listening ? stop() : start(); });
   }
 
