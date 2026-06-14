@@ -180,8 +180,76 @@ table.decisions tbody tr:last-child td { border-bottom: none; }
   display: flex; justify-content: space-between; color: var(--muted); font-size: 12px;
 }
 
-@media (max-width: 640px) {
+/* ===================== mobile / responsive ===================== */
+
+@media (max-width: 760px) {
+  .app-root { padding: 16px 14px 56px; }
+  .topbar { padding: 10px 14px; }
+
+  /* keep tap targets comfortable (>= ~44px) */
+  .btn { padding: 10px 14px; }
+  .btn-small { padding: 6px 10px; }
+
+  .form-head { flex-direction: column; align-items: flex-start; gap: 10px; }
+
   .row { flex-direction: column; gap: 0; }
-  table.decisions { font-size: 12px; }
-  .c-tags, table.decisions th:nth-child(7), table.decisions td:nth-child(7) { display: none; }
+
+  /* full-width controls + 16px font so iOS Safari doesn't auto-zoom on focus */
+  .toolbar { gap: 10px; }
+  .search { min-width: 0; width: 100%; font-size: 16px; }
+  .filter { flex: 1; font-size: 16px; }
+  .field input[type=text], .field input[type=url], .field textarea, .field select { font-size: 16px; }
+
+  /* the export/import buttons stretch to full row */
+  .toolbar .spacer { display: none; }
+  #export-all, #import-doc { flex: 1; text-align: center; }
+
+  /* ---- table -> stacked cards ---- */
+  table.decisions thead { display: none; }
+  table.decisions, table.decisions tbody, table.decisions tr, table.decisions td { display: block; width: 100%; }
+  table.decisions tr {
+    border-bottom: 1px solid var(--line);
+    padding: 10px 12px;
+  }
+  table.decisions tbody tr:last-child { border-bottom: none; }
+  table.decisions td {
+    padding: 3px 0;
+    border: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+  }
+  /* label each cell with its column name */
+  table.decisions td::before {
+    content: attr(data-label);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+    flex: 0 0 auto;
+  }
+  table.decisions td.c-title {
+    font-size: 16px;
+    font-weight: 600;
+    padding-bottom: 6px;
+  }
+  table.decisions td.c-title::before { display: none; }
+  table.decisions td.c-tags { flex-wrap: wrap; }
+
+  .detail { padding: 18px; }
+  .detail h1 { font-size: 20px; }
+  .att-view img { max-width: 100%; }
+
+  .footer { flex-direction: column; gap: 4px; }
+
+  /* attachment rows stack their controls so labels/urls aren't squeezed */
+  .att-row { flex-wrap: wrap; }
+  .att-row input { flex: 1 1 100%; }
+}
+
+@media (max-width: 380px) {
+  .brand-text { font-size: 14px; }
+  .topbar { gap: 8px; }
+  .btn { font-size: 12px; }
 }

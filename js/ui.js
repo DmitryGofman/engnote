@@ -154,13 +154,13 @@
         : esc(d.title || "(untitled)");
       return (
         '<tr data-id="' + esc(d.id) + '">' +
-          '<td class="c-title">' + titleCell + (d.needs_review ? ' <span class="flag" title="needs review">⚑</span>' : "") + "</td>" +
-          "<td>" + dateShort(d.date_created) + "</td>" +
-          '<td><span class="badge st-' + esc(d.status) + '">' + esc(d.status) + "</span></td>" +
-          '<td><span class="badge cf-' + esc(d.confidence) + '">' + esc(d.confidence) + "</span></td>" +
-          "<td>" + esc(maxRisk(d)) + "</td>" +
-          "<td>" + esc(project ? project.name : "—") + "</td>" +
-          '<td class="c-tags">' + (tags.length ? tags.map(function (t) { return '<span class="chip">' + esc(t) + "</span>"; }).join("") : "—") + "</td>" +
+          '<td class="c-title" data-label="Title">' + titleCell + (d.needs_review ? ' <span class="flag" title="needs review">⚑</span>' : "") + "</td>" +
+          '<td data-label="Date">' + dateShort(d.date_created) + "</td>" +
+          '<td data-label="Status"><span class="badge st-' + esc(d.status) + '">' + esc(d.status) + "</span></td>" +
+          '<td data-label="Conf"><span class="badge cf-' + esc(d.confidence) + '">' + esc(d.confidence) + "</span></td>" +
+          '<td data-label="Risk">' + esc(maxRisk(d)) + "</td>" +
+          '<td data-label="Project">' + esc(project ? project.name : "—") + "</td>" +
+          '<td class="c-tags" data-label="Tags">' + (tags.length ? tags.map(function (t) { return '<span class="chip">' + esc(t) + "</span>"; }).join("") : "—") + "</td>" +
         "</tr>"
       );
     }).join("");
